@@ -29,22 +29,25 @@
 
 from dataHandler import loadLidarData
 from dataHandler import visulizeLiadarData
+from dataHandler import removeEmptyData
 
 import numpy as np
 import math
 from queue import Queue
 
 labelCount = 1
-upper_fov = 15
+upper_fov = 15.0
 lower_fov = -25
 N_SCAN = 64
 points_per_second = 500000
 rotation_frequency = 10
-groundScanInd = 15
+groundScanInd = 37
+uselessScanInd = 7
 
 Horizon_SCAN = round(points_per_second / (rotation_frequency * N_SCAN))
-ang_res_x = 360 / Horizon_SCAN
+ang_res_x = 360.0 / Horizon_SCAN
 ang_res_y = (upper_fov - lower_fov) / (N_SCAN - 1)
+
 
 
 def rad2deg(theta):
@@ -81,9 +84,9 @@ def projectPointCloud(lidarData, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, ran
         if columnIdn < 0 or columnIdn >= Horizon_SCAN:
             continue
 
-        # verticalAngle = math.atan2(point[2, 0], math.sqrt(point[0, 0]*point[0, 0] + point[1, 0]*point[1, 0])) * 180 / math.pi
-        # rowIdn = verticalAngle / ang_res_y
-        rowIdn = i // Horizon_SCAN
+        verticalAngle = math.atan2(point[2, 0], math.sqrt(point[0, 0]*point[0, 0] + point[1, 0]*point[1, 0])) * 180 / math.pi
+        rowIdn = round((15 - verticalAngle) / ang_res_y)
+        # rowIdn = i // Horizon_SCAN
         if rowIdn < 0 or rowIdn >= N_SCAN:
             continue
 
@@ -92,9 +95,9 @@ def projectPointCloud(lidarData, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, ran
 
 def groundRemoval(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, groundMat, labelMat, rangeMat):
     for j in range(Horizon_SCAN):
-        for i in range(groundScanInd):
-            lowerInd = j + i * Horizon_SCAN
-            upperInd = j + (i+1) * Horizon_SCAN
+        for i in range(N_SCAN-groundScanInd, N_SCAN):
+            lowerInd = j + (i-1) * Horizon_SCAN
+            upperInd = j + (i) * Horizon_SCAN
             if lidarData[lowerInd, 3] == 0 or lidarData[upperInd, 3] == 0:
                 groundMat[i, j] = -1
                 continue
@@ -105,23 +108,26 @@ def groundRemoval(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, groundMat, lab
 
             angle = math.atan2(diffZ, math.sqrt(diffX*diffX + diffY*diffY)) * 180 / math.pi
             if abs(angle) <= 10:
+                groundMat[i-1, j] = 1
                 groundMat[i, j] = 1
-                groundMat[i+1, j] = 1
     # labelMat == -2: useless point
     for i in range(N_SCAN):
         for j in range(Horizon_SCAN):
-            if groundMat[i, j] == 1 or rangeMat[i, j] == -1:
-                labelMat[i, j] == -2
+            if groundMat[i, j] == 1:
+                labelMat[i, j] = -2
     
 def cloudSegmentation(N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelMat, rangeMat):
+    labelCount = 1
     for i in range(N_SCAN):
         for j in range(Horizon_SCAN):
             if labelMat[i, j] == 0:
-                labelComponents(i, j, N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelMat, rangeMat)
+                labelCount = labelComponents(i, j, N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelMat, rangeMat, labelCount)
     # TODO: handle the labelMat
+
+    return labelCount
             
 
-def labelComponents(row, col, N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelMat, rangeMat, labelCount=labelCount):
+def labelComponents(row, col, N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelMat, rangeMat, labelCount=1):
     lineCountFlag = np.zeros(N_SCAN) == 1
     segmentAlphaX = ang_res_x / 180 * math.pi
     segmentAlphaY = ang_res_y / 180 * math.pi
@@ -161,11 +167,13 @@ def labelComponents(row, col, N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelM
                 labelMat[thisIndX, thisIndY] = labelCount
                 lineCountFlag[thisIndX] = True
                 allqueue.put((thisIndX, thisIndY))
-
+    
     feasibleSegment = False
     if allqueue.qsize() >= 30:
+        print(allqueue.qsize())
         feasibleSegment = True
     elif allqueue.qsize() >= 5:
+        
         lineCount = 0
         for i in range(N_SCAN):
             if lineCountFlag[i]:
@@ -184,11 +192,26 @@ def neighbor(row, col):
     return (row-1, col), (row+1, col), (row, col-1), (row, col+1)
 
 if __name__ == '__main__':
-    lidarData = loadLidarData("G:/Carla/WindowsNoEditor/PythonAPI/output/lidar/2023-01-13-21-54-07-520741.txt")
+    lidarData = loadLidarData("lidarTest.txt")
     rangeMat = np.ones((N_SCAN, Horizon_SCAN)) * (-1)
     groundMat = np.zeros((N_SCAN, Horizon_SCAN))
     labelMat = np.zeros((N_SCAN, Horizon_SCAN))
     projectPointCloud(lidarData, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, rangeMat)
     groundRemoval(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, groundMat, labelMat, rangeMat)
-    cloudSegmentation(N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelMat, rangeMat)
-    # print(rad2deg(startAngle), rad2deg(endAngle), rad2deg(diffAngle))
+    labelCount = cloudSegmentation(N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelMat, rangeMat)
+
+    # groundMat 1: ground points
+
+    for i in range(N_SCAN):
+        for j in range(Horizon_SCAN):
+            if labelMat[i, j] != -1:
+                lidarData[i*Horizon_SCAN+j, 3] = 0
+    
+    # remove n scan
+    # n = 7
+    # lidarData = lidarData[:lidarData.shape[0]-n*Horizon_SCAN,:]
+    dataList = removeEmptyData(lidarData)
+    visulizeLiadarData(dataList)
+    # print(labelCount)
+    # print(np.sum(np.array(labelMat==-2, dtype='int')))
+    # print(np.sum(np.array(labelMat > 0, dtype='int')))
