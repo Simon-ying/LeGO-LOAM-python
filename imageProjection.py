@@ -170,7 +170,7 @@ def labelComponents(row, col, N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelM
     
     feasibleSegment = False
     if allqueue.qsize() >= 30:
-        print(allqueue.qsize())
+        print("cloud count: ", allqueue.qsize())
         feasibleSegment = True
     elif allqueue.qsize() >= 5:
         
@@ -192,7 +192,7 @@ def neighbor(row, col):
     return (row-1, col), (row+1, col), (row, col-1), (row, col+1)
 
 if __name__ == '__main__':
-    lidarData = loadLidarData("lidarTest.txt")
+    lidarData = loadLidarData("lidarTest_nodrop.txt")
     rangeMat = np.ones((N_SCAN, Horizon_SCAN)) * (-1)
     groundMat = np.zeros((N_SCAN, Horizon_SCAN))
     labelMat = np.zeros((N_SCAN, Horizon_SCAN))
