@@ -3,29 +3,25 @@
 # projectPointCloud(): find ground points and other points that are too far from lidar
 # groundRemoval(): remove useless ground points
 # cloudSegmentation(): Use method in Fast Range Image-based Segmentation of Sparse 3D Laser Scans for Online Operation
-
+# problems: segmentation part can't more ensemble more than 30 points ? 
 # Default parameter:
 # upper-fov = 15 degrees
 # lower-fov = -25 degrees
 # N_SCAN = channels = 64
 # range = 100 m
 # points-per-second = 500000
-# rotation_frequency = 10 Hz
+# rotation_frequency = 20 Hz
 # groundScanInd = 15 for Ouster OS1-64
 
 # ang_res_x = 360*rotation_frequency*channels / points_per-second = 0.2304
 # ang_res_y = (upper-fov - lower-fov) / (channels -1) = 40 / 63 = 0.635
 # Horizon_SCAN = points_per-second / (rotation_frequency*channels) = 1562
 
-'''
-// Ouster OS1-64
-// extern const int N_SCAN = 64;
-// extern const int Horizon_SCAN = 1024;
-// extern const float ang_res_x = 360.0/float(Horizon_SCAN);
-// extern const float ang_res_y = 33.2/float(N_SCAN-1);
-// extern const float ang_bottom = 16.6+0.1;
-// extern const int groundScanInd = 15;
-'''
+# labelMat:
+# -3 : empty points
+# -2 : ground points
+# -1 : not selected points
+# >0 : selected points
 
 from dataHandler import loadLidarData
 from dataHandler import visulizeLiadarData
@@ -40,7 +36,7 @@ upper_fov = 15.0
 lower_fov = -25
 N_SCAN = 64
 points_per_second = 500000
-rotation_frequency = 10
+rotation_frequency = 20
 groundScanInd = 37
 uselessScanInd = 7
 
@@ -64,11 +60,22 @@ def findStartEndAngle(lidarData):
     diffAngle = endAngle - startAngle
     return startAngle, endAngle, diffAngle
 
-def projectPointCloud(lidarData, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, rangeMat):
+def findRowIdn(index, lidarData_count):
+    sum = 0
+    row = 0
+    while sum <= index:
+        sum += lidarData_count[row]
+        row += 1
+    return row-1
+
+def projectPointCloud(lidarData, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, rangeMat, lidarData_count):
     # Input:
     # rangeMat: N_SCAN*Horizon_SCCAN matrix init with values of -1
     # TODO: for carla we can get true rowIdn by simulator
     cloudSize = lidarData.shape[0]
+    dataList = np.zeros((N_SCAN*Horizon_SCAN, 4))
+    # print(cloudSize, np.sum(lidarData_count), dataList.shape[0])
+
     point = np.zeros((3, 1))
     for i in range(cloudSize):
         if lidarData[i, 3] == 0:
@@ -86,12 +93,17 @@ def projectPointCloud(lidarData, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, ran
 
         verticalAngle = math.atan2(point[2, 0], math.sqrt(point[0, 0]*point[0, 0] + point[1, 0]*point[1, 0])) * 180 / math.pi
         rowIdn = round((15 - verticalAngle) / ang_res_y)
-        # rowIdn = i // Horizon_SCAN
+        # verify true lidar scan with the calculated lidar scan: OK
+        # if findRowIdn(i, lidarData_count) != rowIdn:
+        #     print("True row index = ", findRowIdn(i, lidarData_count), " Row index = ", rowIdn)
         if rowIdn < 0 or rowIdn >= N_SCAN:
             continue
 
         d = math.sqrt(point[0, 0]*point[0, 0] + point[1, 0]*point[1, 0] + point[2, 0]*point[2, 0])
         rangeMat[rowIdn, columnIdn] = d
+        dataList[rowIdn * Horizon_SCAN + columnIdn, :] = lidarData[i, :]
+    
+    return dataList
 
 def groundRemoval(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, groundMat, labelMat, rangeMat):
     for j in range(Horizon_SCAN):
@@ -113,18 +125,55 @@ def groundRemoval(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, groundMat, lab
     # labelMat == -2: useless point
     for i in range(N_SCAN):
         for j in range(Horizon_SCAN):
-            if groundMat[i, j] == 1:
+            if groundMat[i, j] == 1 or rangeMat[i, j] == -1:
                 labelMat[i, j] = -2
     
-def cloudSegmentation(N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelMat, rangeMat):
+def cloudSegmentation(lidarData, N_SCAN, Horizon_SCAN,groundScanInd, ang_res_x, ang_res_y, labelMat, rangeMat, groundMat):
     labelCount = 1
     for i in range(N_SCAN):
         for j in range(Horizon_SCAN):
             if labelMat[i, j] == 0:
+                if rangeMat[i, j] == -1:
+                    labelMat[i, j] = -3
+                    continue
                 labelCount = labelComponents(i, j, N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelMat, rangeMat, labelCount)
-    # TODO: handle the labelMat
+    
+    sizeOfSegCloud = 0
+    startRingIndex = np.zeros(N_SCAN)
+    endRingIndex = np.zeros(N_SCAN)
+    outlierCloud = []
+    segmentedCloudGroundFlag = []
+    segmentedCloudColInd = []
+    segmentedCloudRange = []
+    segmentedCloud = []
 
-    return labelCount
+    for i in range(N_SCAN):
+        startRingIndex[i] = sizeOfSegCloud - 1 + 5
+        for j in range(Horizon_SCAN):
+            # remove the useless points arround the car 7=useless Scan
+            if i > N_SCAN - 7:
+                continue
+            # Lack of enough points in cloud
+            if labelMat[i, j] == -1:
+                if i < N_SCAN - groundScanInd and j % 5 == 0:
+                    outlierCloud.append(lidarData[i*Horizon_SCAN + j, :])
+                    continue
+                else:
+                    continue
+            if labelMat[i, j] > 0 or groundMat[i, j] == 1:
+                if groundMat[i, j] == 1:
+                    if j % 5 != 0 and j > 5 and j < Horizon_SCAN - 5:
+                        continue
+                segmentedCloudGroundFlag.append(groundMat[i, j] == 1)
+                segmentedCloudColInd.append(j)
+                segmentedCloudRange.append(rangeMat[i, j])
+                segmentedCloud.append(lidarData[i*Horizon_SCAN + j])
+                sizeOfSegCloud += 1
+            endRingIndex[i] = sizeOfSegCloud - 1 - 5
+
+            
+
+    return startRingIndex, endRingIndex, outlierCloud, segmentedCloudGroundFlag, segmentedCloudColInd, segmentedCloudRange, segmentedCloud
             
 
 def labelComponents(row, col, N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelMat, rangeMat, labelCount=1):
@@ -155,6 +204,8 @@ def labelComponents(row, col, N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelM
                 continue
             d1 = max(rangeMat[fromIndX, fromIndY], rangeMat[thisIndX, thisIndY])
             d2 = min(rangeMat[fromIndX, fromIndY], rangeMat[thisIndX, thisIndY])
+            if d2 == -1:
+                continue
 
             # See "Fast Range Image-based Segmentation of Sparse 3D Laser Scans for Online Operation"
             if iter[0] == 0:
@@ -170,7 +221,7 @@ def labelComponents(row, col, N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelM
     
     feasibleSegment = False
     if allqueue.qsize() >= 30:
-        print("cloud count: ", allqueue.qsize())
+        # print("cloud count: ", allqueue.qsize())
         feasibleSegment = True
     elif allqueue.qsize() >= 5:
         
@@ -192,26 +243,34 @@ def neighbor(row, col):
     return (row-1, col), (row+1, col), (row, col-1), (row, col+1)
 
 if __name__ == '__main__':
-    lidarData = loadLidarData("lidarTest_nodrop.txt")
+    # TODO: use lidardataraw
+    lidarCount = loadLidarData("lidarTestRaw_count.txt")
+
+    lidarData = loadLidarData("lidarTestRaw.txt")
     rangeMat = np.ones((N_SCAN, Horizon_SCAN)) * (-1)
     groundMat = np.zeros((N_SCAN, Horizon_SCAN))
     labelMat = np.zeros((N_SCAN, Horizon_SCAN))
-    projectPointCloud(lidarData, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, rangeMat)
+    lidarData = projectPointCloud(lidarData, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, rangeMat, lidarCount)
     groundRemoval(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, groundMat, labelMat, rangeMat)
-    labelCount = cloudSegmentation(N_SCAN, Horizon_SCAN, ang_res_x, ang_res_y, labelMat, rangeMat)
+    startRingIndex, endRingIndex, outlierCloud, segmentedCloudGroundFlag, segmentedCloudColInd, segmentedCloudRange, segmentedCloud = cloudSegmentation(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, ang_res_x, ang_res_y, labelMat, rangeMat, groundMat)
 
     # groundMat 1: ground points
 
     for i in range(N_SCAN):
         for j in range(Horizon_SCAN):
-            if labelMat[i, j] != -1:
+            if labelMat[i, j] < 0 and labelMat[i, j] != -2:
                 lidarData[i*Horizon_SCAN+j, 3] = 0
-    
-    # remove n scan
-    # n = 7
-    # lidarData = lidarData[:lidarData.shape[0]-n*Horizon_SCAN,:]
-    dataList = removeEmptyData(lidarData)
-    visulizeLiadarData(dataList)
-    # print(labelCount)
-    # print(np.sum(np.array(labelMat==-2, dtype='int')))
-    # print(np.sum(np.array(labelMat > 0, dtype='int')))
+    dataList = []
+    colorList = []
+    for i in range(len(segmentedCloud)):
+        if segmentedCloudGroundFlag[i]:
+            colorList.append(np.array([1,0,0]))
+        else:
+            colorList.append(np.array([1,1,1]))
+        dataList.append(segmentedCloud[i])
+    dataList = np.array(dataList)
+    colorList = np.array(colorList)
+    # dataList = removeEmptyData(lidarData)
+    visulizeLiadarData(dataList, colorList)
+    # print(startRingIndex)
+    # print(endRingIndex)
