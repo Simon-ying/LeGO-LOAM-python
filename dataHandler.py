@@ -21,7 +21,7 @@ def removeEmptyData(lidarData):
             continue
         dataList.append([v for v in lidarData[i, :]])
     dataList = np.array(dataList)
-    print("Valuable points: ", dataList.shape[0])
+    # print("Valuable points: ", dataList.shape[0])
     return dataList
 
 def visulizeLiadarData(dataList, colors=np.array(0)):
@@ -72,6 +72,7 @@ def visulizeLiadarData(dataList, colors=np.array(0)):
 
     # vis.poll_events()
     # vis.update_renderer()
+    print("Valuable points: ", dataList.shape[0])
     vis.run()
 
 

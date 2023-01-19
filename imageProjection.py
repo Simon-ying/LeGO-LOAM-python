@@ -30,6 +30,7 @@ from dataHandler import removeEmptyData
 import numpy as np
 import math
 from queue import Queue
+import argparse
 
 labelCount = 1
 upper_fov = 15.0
@@ -108,11 +109,18 @@ def projectPointCloud(lidarData, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, ran
 def groundRemoval(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, groundMat, labelMat, rangeMat):
     for j in range(Horizon_SCAN):
         for i in range(N_SCAN-groundScanInd, N_SCAN):
-            lowerInd = j + (i-1) * Horizon_SCAN
+            lowerRow = i - 1
+            lowerInd = j + lowerRow * Horizon_SCAN
             upperInd = j + (i) * Horizon_SCAN
-            if lidarData[lowerInd, 3] == 0 or lidarData[upperInd, 3] == 0:
+            if lidarData[upperInd, 3] == 0:
                 groundMat[i, j] = -1
                 continue
+            for n in range(4):
+                if lidarData[lowerInd, 3] != 0:
+                    break
+                else:
+                    lowerRow -= 1
+                    lowerInd = j + lowerRow * Horizon_SCAN
 
             diffX = lidarData[upperInd, 0] - lidarData[lowerInd, 0]
             diffY = lidarData[upperInd, 1] - lidarData[lowerInd, 1]
@@ -120,7 +128,7 @@ def groundRemoval(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, groundMat, lab
 
             angle = math.atan2(diffZ, math.sqrt(diffX*diffX + diffY*diffY)) * 180 / math.pi
             if abs(angle) <= 10:
-                groundMat[i-1, j] = 1
+                groundMat[lowerRow, j] = 1
                 groundMat[i, j] = 1
     # labelMat == -2: useless point
     for i in range(N_SCAN):
@@ -244,33 +252,83 @@ def neighbor(row, col):
 
 if __name__ == '__main__':
     # TODO: use lidardataraw
-    lidarCount = loadLidarData("lidarTestRaw_count.txt")
+    argparser = argparse.ArgumentParser(
+        description=__doc__)
+    argparser.add_argument(
+        '--flag',
+        default=0,
+        type=int,
+        help='0: initial cloud, 1: initial cloud with colors, 2: segmented cloud, 3: ground points, 4: remove ground points')
+    argparser.add_argument(
+        '--data',
+        default=0,
+        type=int,
+        help='0: initial data, 1: another data')
+    args = argparser.parse_args()
 
-    lidarData = loadLidarData("lidarTestRaw.txt")
+    lidarCount = loadLidarData("lidarTestRaw_count.txt")
+    lidarData_ori = loadLidarData("lidarTestRaw.txt")
+    if args.data == 1:
+        lidarCount = loadLidarData("lidarTestRaw_count3.txt")
+        lidarData_ori = loadLidarData("lidarTestRaw3.txt")
+
     rangeMat = np.ones((N_SCAN, Horizon_SCAN)) * (-1)
     groundMat = np.zeros((N_SCAN, Horizon_SCAN))
     labelMat = np.zeros((N_SCAN, Horizon_SCAN))
-    lidarData = projectPointCloud(lidarData, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, rangeMat, lidarCount)
+    lidarData = projectPointCloud(lidarData_ori, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, rangeMat, lidarCount)
     groundRemoval(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, groundMat, labelMat, rangeMat)
     startRingIndex, endRingIndex, outlierCloud, segmentedCloudGroundFlag, segmentedCloudColInd, segmentedCloudRange, segmentedCloud = cloudSegmentation(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, ang_res_x, ang_res_y, labelMat, rangeMat, groundMat)
 
     # groundMat 1: ground points
 
-    for i in range(N_SCAN):
-        for j in range(Horizon_SCAN):
-            if labelMat[i, j] < 0 and labelMat[i, j] != -2:
-                lidarData[i*Horizon_SCAN+j, 3] = 0
-    dataList = []
-    colorList = []
+    
+
+    dataList_seg = []
+    colorList_seg = []
     for i in range(len(segmentedCloud)):
         if segmentedCloudGroundFlag[i]:
-            colorList.append(np.array([1,0,0]))
+            colorList_seg.append(np.array([1,0,0]))
         else:
-            colorList.append(np.array([1,1,1]))
-        dataList.append(segmentedCloud[i])
-    dataList = np.array(dataList)
-    colorList = np.array(colorList)
+            colorList_seg.append(np.array([1,1,1]))
+        dataList_seg.append(segmentedCloud[i])
+    dataList_seg = np.array(dataList_seg)
+    colorList_seg = np.array(colorList_seg)
     # dataList = removeEmptyData(lidarData)
-    visulizeLiadarData(dataList, colorList)
+
+    if args.flag == 0:
+        print("All points: ", np.sum(lidarCount))
+        visulizeLiadarData(removeEmptyData(lidarData_ori))
+        
+    elif args.flag == 2:
+        visulizeLiadarData(dataList_seg, colorList_seg)
+    elif args.flag == 3:
+        for i in range(N_SCAN):
+            for j in range(Horizon_SCAN):
+                if labelMat[i, j] != -2:
+                    lidarData[i*Horizon_SCAN+j, 3] = 0
+        visulizeLiadarData(removeEmptyData(lidarData))
+    elif args.flag == 4:
+        for i in range(N_SCAN):
+            for j in range(Horizon_SCAN):
+                if labelMat[i, j] == -2:
+                    lidarData[i*Horizon_SCAN+j, 3] = 0
+        visulizeLiadarData(removeEmptyData(lidarData))
+    else:
+        dataList_other = []
+        colorList_other = []
+        for i in range(N_SCAN):
+            for j in range(Horizon_SCAN):
+                if labelMat[i, j] == -1:
+                    if lidarData[i*Horizon_SCAN + j, 3] == 0:
+                        continue
+                    dataList_other.append(lidarData[i*Horizon_SCAN + j, :])
+                    colorList_other.append(np.array([0,1,0]))
+        dataList_other = np.array(dataList_other)
+        colorList_other = np.array(colorList_other)
+        dataList_other = np.r_[dataList_other, dataList_seg]
+        colorList_other = np.r_[colorList_other, colorList_seg]
+        # print(dataList_other.shape, colorList_other.shape)
+        visulizeLiadarData(dataList_other, colorList_other)
+    
     # print(startRingIndex)
     # print(endRingIndex)
