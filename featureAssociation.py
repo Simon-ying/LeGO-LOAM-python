@@ -28,6 +28,7 @@ from dataHandler import removeEmptyData
 
 import numpy as np
 import math
+from math import sin, cos, atan2
 from queue import Queue
 
 def calculateSmoothness(segmentedCloud, segmentedCloudRange, cloudCurvature, cloudNeighborPicked, cloudLabel, cloudSmoothness):
@@ -74,17 +75,107 @@ def markOccludePoints(segmentedCloud, segmentedCloudRange, segmentedCloudColInd,
         if diff1 > 0.02 * segmentedCloudRange[i-1] and diff2 > 0.02 * segmentedCloudRange[i]:
             cloudNeighborPicked[i] = 1
 
-def extractFeatures(N_SCAN, startRingIndex, endRingIndex):
-    conerPointsSharp = []
+def extractFeatures(N_SCAN, startRingIndex, endRingIndex, segmentedCloud, segmentedCloudColInd, cloudSmoothness, cloudNeighborPicked, cloudCurvature, segmentedCloudGroundFlag, cloudLabel):
+    cornerPointsSharp = []
     cornerPointsLessSharp = []
     surfPointsFlat = []
     surfPointsLessFlat = []
+    surfPointsLessFlatScan = []
+    edgeThreshold = 0 # to modify
+    surfThreshold = 0
+    # cloudSmoothness_sorted = np.argsort(cloudSmoothness, axis=0)
     for i in range(N_SCAN):
-        surfPointsLessFlat.clear()
+        surfPointsLessFlatScan.clear()
         for j in range(6):
             sp = (startRingIndex[i] * (6-j) + endRingIndex[i] * j) / 6
             ep = (startRingIndex[i] * (5-j) + endRingIndex[i] * (j+1)) / 6 - 1
 
             if sp >= ep:
                 continue
+            # sorted(cloudSmoothness) sort cloudSmoothness
+            largestPickedNum = 0
+            for k in range(ep, sp-1, -1):
+                ind = cloudSmoothness[k, 1]
+                if cloudNeighborPicked[ind] == 0 and cloudCurvature[ind] > edgeThreshold and not segmentedCloudGroundFlag[ind]:
+                    largestPickedNum += 1
+                    if largestPickedNum <= 2:
+                        cloudLabel[ind] = 2
+                        cornerPointsSharp.append(segmentedCloud[ind, :])
+                        cornerPointsLessSharp.append(segmentedCloud[ind, :])
+                    elif largestPickedNum <= 20:
+                        cloudLabel[ind] = 1
+                        cornerPointsSharp.append(segmentedCloud[ind, :])
+                    else:
+                        break
+
+                    cloudNeighborPicked[ind] = 1
+                    for l in range(1, 6):
+                        columnDiff = abs(int(segmentedCloudColInd[ind+l] - segmentedCloudColInd[ind+l-1]))
+                        if columnDiff > 10:
+                            break
+                        cloudNeighborPicked[ind+l] = 1
+                    for l in range(-1, -6, -1):
+                        columnDiff = abs(int(segmentedCloudColInd[ind+l] - segmentedCloudColInd[ind+l+1]))
+                        if columnDiff > 10:
+                            break
+                        cloudNeighborPicked[ind+l] = 1
             
+            smallestPickedNum = 0
+            for k in range(sp, ep+1):
+                ind = cloudSmoothness[k, 1]
+                if cloudNeighborPicked[ind] == 0 and cloudCurvature[ind] < surfThreshold and segmentedCloudGroundFlag[ind]:
+                    surfPointsFlat.append(segmentedCloud[ind, :])
+                    smallestPickedNum += 1
+                    if smallestPickedNum >= 4:
+                        break
+                    cloudNeighborPicked[ind] = 1
+
+                    for l in range(1, 6):
+                        columnDiff = abs(int(segmentedCloudColInd[ind+l] - segmentedCloudColInd[ind+l-1]))
+                        if columnDiff > 10:
+                            break
+                        cloudNeighborPicked[ind+l] = 1
+                    
+                    for l in range(-1, -6, -1):
+                        columnDiff = abs(int(segmentedCloudColInd[ind+l] - segmentedCloudColInd[ind+l-+]))
+                        if columnDiff > 10:
+                            break
+                        cloudNeighborPicked[ind+l] = 1
+            for k in range(qp, ep+1):
+                if cloudLabel <= 0:
+                    surfPointsLessFlatScan.append(segmentedCloud[k, :])
+        # TODO: down size filter
+
+def TransformToStart():
+    return
+def TransformToEnd():
+    return
+def AccumulateRotation(cx, cy, cz, lx, ly, lz, ox, oy, oz):
+    srx = cos(lx)*cos(cx)*sin(ly)*sin(cz) - cos(cx)*cos(cz)*sin(lx) - cos(lx)*cos(ly)*sin(cx)
+    ox = -asin(srx)
+
+    srycrx = sin(lx)*(cos(cy)*sin(cz) - cos(cz)*sin(cx)*sin(cy)) + cos(lx)*sin(ly)*(cos(cy)*cos(cz) 
+                     + sin(cx)*sin(cy)*sin(cz)) + cos(lx)*cos(ly)*cos(cx)*sin(cy)
+    crycrx = cos(lx)*cos(ly)*cos(cx)*cos(cy) - cos(lx)*sin(ly)*(cos(cz)*sin(cy) 
+                    - cos(cy)*sin(cx)*sin(cz)) - sin(lx)*(sin(cy)*sin(cz) + cos(cy)*cos(cz)*sin(cx))
+    oy = atan2(srycrx / cos(ox), crycrx / cos(ox))
+
+    srzcrx = sin(cx)*(cos(lz)*sin(ly) - cos(ly)*sin(lx)*sin(lz)) + cos(cx)*sin(cz)*(cos(ly)*cos(lz) 
+                    + sin(lx)*sin(ly)*sin(lz)) + cos(lx)*cos(cx)*cos(cz)*sin(lz)
+    crzcrx = cos(lx)*cos(lz)*cos(cx)*cos(cz) - cos(cx)*sin(cz)*(cos(ly)*sin(lz) 
+                    - cos(lz)*sin(lx)*sin(ly)) - sin(cx)*(sin(ly)*sin(lz) + cos(ly)*cos(lz)*sin(lx))
+    oz = atan2(srzcrx / cos(ox), crzcrx / cos(ox))
+    return ox, oy, oz
+
+def rad2deg(radians):
+    return radians * 180 / math.pi
+def deg2rad(degrees):
+    return degrees * math.pi / 180
+
+def findCorrespondingCornerFeatures(iterCount, cornerPointsSharp):
+    cornerPointsSharpNum = len(cornerPointsSharp)
+    for i in range(cornerPointsSharpNum):
+        TransformToStart()
+        
+        if iterCount % 5 == 0:
+            continue
