@@ -9,6 +9,12 @@ from queue import Queue
 import copy
 import cv2 as cv
 
+# default coordinate: (x, y, z) -> opencv coordinate (y, -z, x)
+# segmentedCloud, segmentedCloudRange given by imageProjection.cloudSegmentation()
+# cloudCurvature = np.zeros(segmentedCloud.shape[0])
+# cloudNeighborPicked = np.zeros(segmentedCloud.shape[0])
+# cloudLabel = np.zeros(segmentedCloud.shape[0])
+# cloudSmoothness = np.zeros((segmentedCloud.shape[0],2))
 def calculateSmoothness(segmentedCloud, segmentedCloudRange, cloudCurvature, cloudNeighborPicked, cloudLabel, cloudSmoothness):
     cloudSize = segmentedCloud.shape[0]
     for i in range(5, cloudSize - 5):
@@ -52,6 +58,7 @@ def markOccludePoints(segmentedCloud, segmentedCloudRange, segmentedCloudColInd,
 
         if diff1 > 0.02 * segmentedCloudRange[i-1] and diff2 > 0.02 * segmentedCloudRange[i]:
             cloudNeighborPicked[i] = 1
+# except of sharp or less sharp points, the left of points are less surf points
 
 def extractFeatures(N_SCAN, startRingIndex, endRingIndex, segmentedCloud, segmentedCloudColInd, cloudSmoothness, cloudNeighborPicked, cloudCurvature, segmentedCloudGroundFlag, cloudLabel):
     cornerPointsSharp = []
@@ -68,14 +75,21 @@ def extractFeatures(N_SCAN, startRingIndex, endRingIndex, segmentedCloud, segmen
             sp = (startRingIndex[i] * (6-j) + endRingIndex[i] * j) / 6
             ep = (startRingIndex[i] * (5-j) + endRingIndex[i] * (j+1)) / 6 - 1
 
+            sp = int(sp)
+            ep = int(ep)
+
             if sp >= ep:
                 continue
-            sorted_args = np.argsort(cloudSmoothness[sp:ep+1, 0], axis=0)[::-1]
+            sorted_args = np.argsort(cloudSmoothness[sp:ep+1, 0], axis=0)
             sorted_args += sp
+
+            # print("before:", cloudSmoothness[sp:ep+1, 0])
+            # print("after:", cloudSmoothness[sorted_args, 0])
 
             largestPickedNum = 0
             for k in range(ep, sp-1, -1):
-                ind = cloudSmoothness[sorted_args[k-sp], 1]
+                ind = int(cloudSmoothness[sorted_args[k-sp], 1])
+                # print(cloudSmoothness[sorted_args[k-sp], 1], ind, cloudNeighborPicked[ind], cloudCurvature[ind], segmentedCloudGroundFlag[ind])
                 if cloudNeighborPicked[ind] == 0 and cloudCurvature[ind] > edgeThreshold and not segmentedCloudGroundFlag[ind]:
                     largestPickedNum += 1
                     if largestPickedNum <= 2:
@@ -99,10 +113,10 @@ def extractFeatures(N_SCAN, startRingIndex, endRingIndex, segmentedCloud, segmen
                         if columnDiff > 10:
                             break
                         cloudNeighborPicked[ind+l] = 1
-            
+            # print("largest Picked:", largestPickedNum)
             smallestPickedNum = 0
             for k in range(sp, ep+1):
-                ind = cloudSmoothness[sorted_args[k-sp], 1]
+                ind = int(cloudSmoothness[sorted_args[k-sp], 1])
                 if cloudNeighborPicked[ind] == 0 and cloudCurvature[ind] < surfThreshold and segmentedCloudGroundFlag[ind]:
                     surfPointsFlat.append(segmentedCloud[ind, :])
                     smallestPickedNum += 1
@@ -122,7 +136,7 @@ def extractFeatures(N_SCAN, startRingIndex, endRingIndex, segmentedCloud, segmen
                             break
                         cloudNeighborPicked[ind+l] = 1
             for k in range(sp, ep+1):
-                if cloudLabel <= 0:
+                if cloudLabel[k] <= 0:
                     surfPointsLessFlatScan.append(segmentedCloud[k, :])
         # TODO: downsize filter
         surfPointsLessFlat += copy.deepcopy(surfPointsLessFlatScan)
@@ -155,6 +169,9 @@ def d(point1, point2):
     diffZ = point1[2] - point2[2]
     return diffX*diffX + diffY*diffY + diffZ*diffZ
 
+def TransformCoord(UE4pt):
+    return np.array([UE4pt[1], -UE4pt[2], UE4pt[0], UE4pt[3]])
+
 # laserCloudCornerLast : [x, y, z, scan]
 # pointSearchCornerInd1&2 : initialize with -1
 def findCorrespondingCornerFeatures(iterCount, cornerPointsSharp, laserCloudCornerLast):
@@ -167,52 +184,54 @@ def findCorrespondingCornerFeatures(iterCount, cornerPointsSharp, laserCloudCorn
 
     for i in range(cornerPointsSharpNum):
         # pointSel == cornerPointsShape[i, :]
-        pointSel = cornerPointsSharp[i]
+        pointSel = TransformCoord(cornerPointsSharp[i])
         if iterCount % 5 == 0:
             # TODO: KD=Tree for laser cloud corner&surf last            
             # Find nearest point
             ind = 0
             dis = math.inf
-            for i in range(len(laserCloudCornerLast)):
-                temp_dis = d(pointSel, laserCloudCornerLast[i])
+            for di in range(len(laserCloudCornerLast)):
+                temp_dis = d(pointSel, TransformCoord(laserCloudCornerLast[di]))
                 if temp_dis < dis:
                     dis = temp_dis
-                    ind = i
+                    ind = di
             closestPointInd = -1
             minPointInd2 = -1
 
             if dis < nearestFeatureSearchSqDist:
                 closestPointInd = ind
                 closestPointScan = laserCloudCornerLast[closestPointInd][3]
-                pointSqDis, minPointSqDis2 = nearestFeatureSearchSqDist
+                pointSqDis, minPointSqDis2 = [nearestFeatureSearchSqDist] * 2
 
                 for j in range(closestPointInd+1, cornerPointsSharpNum):
+                    if j >= len(laserCloudCornerLast):
+                        # print("cornerPointsSharpNum:", cornerPointsSharpNum, " > laserCloudCornerLast:", len(laserCloudCornerLast))
+                        continue
                     if laserCloudCornerLast[j][3] > closestPointScan + 2.5:
                         break
-                    pointSqDis = (laserCloudCornerLast[j][0] - pointSel[0]) * (laserCloudCornerLast[j][0] - pointSel[0]) + \
-                                 (laserCloudCornerLast[j][1] - pointSel[1]) * (laserCloudCornerLast[j][1] - pointSel[1]) + \
-                                 (laserCloudCornerLast[j][2] - pointSel[2]) * (laserCloudCornerLast[j][2] - pointSel[2])
+                    pointSqDis = d(TransformCoord(laserCloudCornerLast[j]), pointSel)
                     if laserCloudCornerLast[j][3] > closestPointScan:
-                        if pointSqDis < minPointInd2:
+                        if pointSqDis < minPointSqDis2:
                             minPointSqDis2 = pointSqDis
                             minPointInd2 = j
                 
                 for j in range(closestPointInd-1, -1,-1):
                     if laserCloudCornerLast[j][3] < closestPointScan - 2.5:
                         break
-                    pointSqDis = (laserCloudCornerLast[j][0] - pointSel[0]) * (laserCloudCornerLast[j][0] - pointSel[0]) + \
-                                 (laserCloudCornerLast[j][1] - pointSel[1]) * (laserCloudCornerLast[j][1] - pointSel[1]) + \
-                                 (laserCloudCornerLast[j][2] - pointSel[2]) * (laserCloudCornerLast[j][2] - pointSel[2])
+                    pointSqDis = d(TransformCoord(laserCloudCornerLast[j]), pointSel)
                     if laserCloudCornerLast[j][3] < closestPointScan:
-                        if pointSqDis < minPointInd2:
+                        if pointSqDis < minPointSqDis2:
                             minPointSqDis2 = pointSqDis
                             minPointInd2 = j
-                pointSearchCornerInd1[i] = closestPointInd
-                pointSearchCornerInd2[i] = minPointInd2
+                pointSearchCornerInd1[i] = (closestPointInd)
+                pointSearchCornerInd2[i] = (minPointInd2)
+                # if minPointInd2 >= 0:
+                #     print("Indices corner:", (closestPointInd, minPointInd2))
 
             if pointSearchCornerInd2[i] >= 0:
-                tripod1 = laserCloudCornerLast[pointSearchCornerInd1[i]]
-                tripod2 = laserCloudCornerLast[pointSearchCornerInd2[i]]
+                # print(pointSearchCornerInd2[i])
+                tripod1 = TransformCoord(laserCloudCornerLast[int(pointSearchCornerInd1[i])])
+                tripod2 = TransformCoord(laserCloudCornerLast[int(pointSearchCornerInd2[i])])
                 coeff = np.zeros((4,1))
                 # TODO: understand coeff
                 x0 = pointSel[0]
@@ -236,6 +255,8 @@ def findCorrespondingCornerFeatures(iterCount, cornerPointsSharp, laserCloudCorn
                 # l12 = |Y1-Y2|
                 l12 = math.sqrt((x1 - x2)*(x1 - x2) + (y1 - y2)*(y1 - y2) + (z1 - z2)*(z1 - z2))
 
+                # if a012 == 0 or l12 == 0:
+                #     print(a012, l12, pointSel, tripod1, tripod2)
                 la =  ((y1 - y2)*m11 + (z1 - z2)*m22) / a012 / l12
 
                 lb = -((x1 - x2)*m11 - (z1 - z2)*m33) / a012 / l12
@@ -255,33 +276,34 @@ def findCorrespondingCornerFeatures(iterCount, cornerPointsSharp, laserCloudCorn
                     coeff[2] = s * lc
                     coeff[3] = s * ld2
                   
-                    laserCloudOri.append(cornerPointsSharp[i])
+                    laserCloudOri.append(TransformCoord(cornerPointsSharp[i]))
                     coeffSel.append(coeff)
     return laserCloudOri, coeffSel
 
 
 def findCorrespondingSurfFeatures(iterCount, surfPointsFlat, laserCloudSurfLast):
-    surfPointsSharpNum = len(surfPointsFlat)
+    surfPointsFlatNum = len(surfPointsFlat)
     nearestFeatureSearchSqDist = 25
     laserCloudOri = []
     coeffSel = []
-    pointSearchSurfInd1 = np.ones(surfPointsSharpNum) * (-1)
-    pointSearchSurfInd2 = np.ones(surfPointsSharpNum) * (-1)
-    pointSearchSurfInd3 = np.ones(surfPointsSharpNum) * (-1)
+    pointSearchSurfInd1 = np.ones(surfPointsFlatNum) * (-1)
 
-    for i in range(surfPointsSharpNum):
+    pointSearchSurfInd2 = np.ones(surfPointsFlatNum) * (-1)
+    pointSearchSurfInd3 = np.ones(surfPointsFlatNum) * (-1)
+
+    for i in range(surfPointsFlatNum):
         # pointSel == cornerPointsShape[i, :]
-        pointSel = surfPointsFlat[i]
+        pointSel = TransformCoord(surfPointsFlat[i])
         if iterCount % 5 == 0:
             # TODO: KD=Tree for laser cloud corner&surf last            
             # Find nearest point
             ind = 0
             dis = math.inf
-            for i in range(len(laserCloudSurfLast)):
-                temp_dis = d(pointSel, laserCloudSurfLast[i])
+            for di in range(len(laserCloudSurfLast)):
+                temp_dis = d(pointSel, TransformCoord(laserCloudSurfLast[di]))
                 if temp_dis < dis:
                     dis = temp_dis
-                    ind = i
+                    ind = di
             closestPointInd = -1
             minPointInd2 = -1
             minPointInd3 = -1
@@ -289,16 +311,17 @@ def findCorrespondingSurfFeatures(iterCount, surfPointsFlat, laserCloudSurfLast)
             if dis < nearestFeatureSearchSqDist:
                 closestPointInd = ind
                 closestPointScan = laserCloudSurfLast[closestPointInd][3]
-                pointSqDis, minPointSqDis2, minPointSqDis3 = nearestFeatureSearchSqDist
+                pointSqDis, minPointSqDis2, minPointSqDis3 = [nearestFeatureSearchSqDist] * 3
 
-                for j in range(closestPointInd+1, surfPointsSharpNum):
+                for j in range(closestPointInd+1, surfPointsFlatNum):
+                    if j >= len(laserCloudSurfLast):
+                        # print("surfPointsFlatNum:", surfPointsFlatNum, " > laserCloudSurfLast:", len(laserCloudSurfLast))
+                        continue
                     if laserCloudSurfLast[j][3] > closestPointScan + 2.5:
                         break
-                    pointSqDis = (laserCloudSurfLast[j][0] - pointSel[0]) * (laserCloudSurfLast[j][0] - pointSel[0]) + \
-                                 (laserCloudSurfLast[j][1] - pointSel[1]) * (laserCloudSurfLast[j][1] - pointSel[1]) + \
-                                 (laserCloudSurfLast[j][2] - pointSel[2]) * (laserCloudSurfLast[j][2] - pointSel[2])
+                    pointSqDis = d(pointSel, TransformCoord(laserCloudSurfLast[j]))
                     if laserCloudSurfLast[j][3] <= closestPointScan:
-                        if pointSqDis < minPointInd2:
+                        if pointSqDis < minPointSqDis2:
                             minPointSqDis2 = pointSqDis
                             minPointInd2 = j
                     else:
@@ -307,26 +330,26 @@ def findCorrespondingSurfFeatures(iterCount, surfPointsFlat, laserCloudSurfLast)
                             minPointInd3 = j
                 
                 for j in range(closestPointInd-1, -1, -1):
-                    if laserCloudSurfLast[j][3] > closestPointScan - 2.5:
+                    if laserCloudSurfLast[j][3] < closestPointScan - 2.5:
                         break
-                    pointSqDis = (laserCloudSurfLast[j][0] - pointSel[0]) * (laserCloudSurfLast[j][0] - pointSel[0]) + \
-                                 (laserCloudSurfLast[j][1] - pointSel[1]) * (laserCloudSurfLast[j][1] - pointSel[1]) + \
-                                 (laserCloudSurfLast[j][2] - pointSel[2]) * (laserCloudSurfLast[j][2] - pointSel[2])
+                    pointSqDis = d(pointSel, TransformCoord(laserCloudSurfLast[j]))
                     if laserCloudSurfLast[j][3] >= closestPointScan:
-                        if pointSqDis < minPointInd2:
+                        if pointSqDis < minPointSqDis2:
                             minPointSqDis2 = pointSqDis
                             minPointInd2 = j
                     else:
                         if pointSqDis < minPointSqDis3:
                             minPointSqDis3 = pointSqDis
                             minPointInd3 = j
-                pointSearchSurfInd1[i] = closestPointInd
-                pointSearchSurfInd2[i] = minPointInd2
-                pointSearchSurfInd3[i] = minPointInd3
+                pointSearchSurfInd1[i] = int(closestPointInd)
+                pointSearchSurfInd2[i] = int(minPointInd2)
+                pointSearchSurfInd3[i] = int(minPointInd3)
+                # if minPointInd2 >=0 and minPointInd3 >=0:
+                #     print("Indeices:", (closestPointInd, minPointInd2, minPointInd3))
             if pointSearchSurfInd2[i] >= 0 and pointSearchSurfInd3[i] >= 0:
-                tripod1 = laserCloudSurfLast[pointSearchSurfInd1[i]]
-                tripod2 = laserCloudSurfLast[pointSearchSurfInd2[i]]
-                tripod3 = laserCloudSurfLast[pointSearchSurfInd3[i]]
+                tripod1 = TransformCoord(laserCloudSurfLast[int(pointSearchSurfInd1[i])])
+                tripod2 = TransformCoord(laserCloudSurfLast[int(pointSearchSurfInd2[i])])
+                tripod3 = TransformCoord(laserCloudSurfLast[int(pointSearchSurfInd3[i])])
                 coeff = np.zeros((4,1))
 
                 pa = (tripod2[1] - tripod1[1]) * (tripod3[2] - tripod1[2]) - (tripod3[1] - tripod1[1]) * (tripod2[2] - tripod1[2])
@@ -354,13 +377,14 @@ def findCorrespondingSurfFeatures(iterCount, surfPointsFlat, laserCloudSurfLast)
                     coeff[2] = s * pc
                     coeff[3] = s * pd2
 
-                    laserCloudOri.append(surfPointsFlat[i])
+                    laserCloudOri.append(TransformCoord(surfPointsFlat[i]))
                     coeffSel.append(coeff)
     return laserCloudOri, coeffSel
 
 
 def calculateTransformationSurf(iterCount, laserCloudOri, coeffSel, transformCur):
     # transformCur = np.zeros((6,1), np.float32)
+    isDegenerate = False
     pointSelNum = len(laserCloudOri)
 
     matA = np.zeros((pointSelNum, 3), np.float32)
@@ -431,22 +455,22 @@ def calculateTransformationSurf(iterCount, laserCloudOri, coeffSel, transformCur
     matAt = cv.transpose(matA)
     matAtA = matAt.dot(matA)
     matAtB = matAt.dot(matB)
-    matX = cv.solve(matAtA, matAtB, cv.DECOMP_QR)
+    _, matX = cv.solve(matAtA, matAtB, cv.DECOMP_QR)
 
     if iterCount == 0:
         # matE = np.zeros((1, 3), np.float32)
         # matV = np.zeros((3, 3), np.float32)
         # matV2 = np.zeros((3, 3), np.float32)
 
-        eigens = cv.eigen(matAt)
-        matE = eigens[0]
-        matV = eigens[1]
+        _, matE, matV = cv.eigen(matAtA)
+
         matV2 = copy.copy(matV)
 
         isDegenerate = False
         eignThre = [10, 10, 10]
+
         for i in range(2, -1, -1):
-            if matE[0, i] < eignThre[i]:
+            if matE[i] < eignThre[i]:
                 for j in range(3):
                     matV2[i, j] = 0
                 isDegenerate = True
@@ -470,12 +494,14 @@ def calculateTransformationSurf(iterCount, laserCloudOri, coeffSel, transformCur
     deltaT = math.sqrt((matX[2, 0]*100)**2)
 
     if deltaR < 0.1 and deltaT < 0.1:
+        print("deltaR, deltaT:", (deltaR, deltaT))
         return False
     return True
 
 
 def calculateTransformationCorner(iterCount, laserCloudOri, coeffSel, transformCur):
     # transformCur = np.zeros((6,1), np.float32)
+    isDegenerate = False
     pointSelNum = len(laserCloudOri)
 
     matA = np.zeros((pointSelNum, 3), np.float32)
@@ -510,12 +536,12 @@ def calculateTransformationCorner(iterCount, laserCloudOri, coeffSel, transformC
         pointOri = laserCloudOri[i]
         coeff = coeffSel[i]
 
-        ary = (b1*pointOri[0] + b2*pointOri[1] - b3*pointOri.z + b4) * coeff[0]
-        + (b5*pointOri[0] + b6*pointOri[1] - b7*pointOri.z + b8) * coeff.z
+        ary = (b1*pointOri[0] + b2*pointOri[1] - b3*pointOri[2] + b4) * coeff[0]
+        + (b5*pointOri[0] + b6*pointOri[1] - b7*pointOri[2] + b8) * coeff[2]
 
-        atx = -b5 * coeff[0] + c5 * coeff[1] + b1 * coeff.z
+        atx = -b5 * coeff[0] + c5 * coeff[1] + b1 * coeff[2]
 
-        atz = b7 * coeff[0] - srx * coeff[1] - b3 * coeff.z
+        atz = b7 * coeff[0] - srx * coeff[1] - b3 * coeff[2]
 
         d2 = coeff[3]
 
@@ -527,22 +553,19 @@ def calculateTransformationCorner(iterCount, laserCloudOri, coeffSel, transformC
     matAt = cv.transpose(matA)
     matAtA = matAt.dot(matA)
     matAtB = matAt.dot(matB)
-    matX = cv.solve(matAtA, matAtB, cv.DECOMP_QR)
+    _, matX = cv.solve(matAtA, matAtB, cv.DECOMP_QR)
 
     if iterCount == 0:
         # matE = np.zeros((1, 3), np.float32)
         # matV = np.zeros((3, 3), np.float32)
         # matV2 = np.zeros((3, 3), np.float32)
 
-        eigens = cv.eigen(matAt)
-        matE = eigens[0]
-        matV = eigens[1]
+        _, matE, matV = cv.eigen(matAtA)
         matV2 = copy.copy(matV)
-
         isDegenerate = False
         eignThre = [10, 10, 10]
         for i in range(2, -1, -1):
-            if matE[0, i] < eignThre[i]:
+            if matE[i] < eignThre[i]:
                 for j in range(3):
                     matV2[i, j] = 0
                 isDegenerate = True
@@ -630,18 +653,18 @@ def calculateTransformation(iterCount, laserCloudOri, coeffSel, transformCur):
         + (a5*pointOri[0] - a6*pointOri[1] + crx*pointOri[2] + a7) * coeff[1]
         + (a8*pointOri[0] - a9*pointOri[1] - a10*pointOri[2] + a11) * coeff[2]
 
-        ary = (b1*pointOri[0] + b2*pointOri[1] - b3*pointOri.z + b4) * coeff[0]
-        + (b5*pointOri[0] + b6*pointOri[1] - b7*pointOri.z + b8) * coeff.z
+        ary = (b1*pointOri[0] + b2*pointOri[1] - b3*pointOri[2] + b4) * coeff[0]
+        + (b5*pointOri[0] + b6*pointOri[1] - b7*pointOri[2] + b8) * coeff[2]
 
         arz = (c1*pointOri[0] + c2*pointOri[1] + c3) * coeff[0]
         + (c4*pointOri[0] - c5*pointOri[1] + c6) * coeff[1]
         + (c7*pointOri[0] + c8*pointOri[1] + c9) * coeff[2]
 
-        atx = -b5 * coeff[0] + c5 * coeff[1] + b1 * coeff.z
+        atx = -b5 * coeff[0] + c5 * coeff[1] + b1 * coeff[2]
 
         aty = -b6 * coeff[0] + c4 * coeff[1] + b2 * coeff[2]
 
-        atz = b7 * coeff[0] - srx * coeff[1] - b3 * coeff.z
+        atz = b7 * coeff[0] - srx * coeff[1] - b3 * coeff[2]
 
         d2 = coeff[3]
 
@@ -663,7 +686,7 @@ def calculateTransformation(iterCount, laserCloudOri, coeffSel, transformCur):
         # matV = np.zeros((6, 6), np.float32)
         # matV2 = np.zeros((6, 6), np.float32)
 
-        eigens = cv.eigen(matAt)
+        eigens = cv.eigen(matAtA)
         matE = eigens[0]
         matV = eigens[1]
         matV2 = copy.copy(matV)
@@ -701,7 +724,7 @@ def calculateTransformation(iterCount, laserCloudOri, coeffSel, transformCur):
         return False
     return True
 
-def updateTransformation(laserCloudCornerLast, laserCloudSurfLast, surfPointsFlat, cornerPointSharp, transformCur):
+def updateTransformation(laserCloudCornerLast, laserCloudSurfLast, surfPointsFlat, cornerPointsSharp, transformCur):
     if len(laserCloudCornerLast) < 10 or len(laserCloudSurfLast) < 100:
         return
     for iterCount1 in range(25):
@@ -712,7 +735,7 @@ def updateTransformation(laserCloudCornerLast, laserCloudSurfLast, surfPointsFla
             break
     
     for iterCount2 in range(25):
-        laserCloudOri, coeffSel = findCorrespondingCornerFeatures(iterCount2, cornerPointSharp, laserCloudCornerLast)
+        laserCloudOri, coeffSel = findCorrespondingCornerFeatures(iterCount2, cornerPointsSharp, laserCloudCornerLast)
         if len(laserCloudOri) < 10:
             continue
         if calculateTransformationCorner(iterCount2, laserCloudOri, coeffSel, transformCur) == False:

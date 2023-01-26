@@ -69,7 +69,7 @@ def findRowIdn(index, lidarData_count):
         row += 1
     return row-1
 
-def projectPointCloud(lidarData, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, rangeMat, lidarData_count):
+def projectPointCloud(lidarData, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, rangeMat):
     # Input:
     # rangeMat: N_SCAN*Horizon_SCCAN matrix init with values of -1
     # TODO: for carla we can get true rowIdn by simulator
@@ -175,7 +175,7 @@ def cloudSegmentation(lidarData, N_SCAN, Horizon_SCAN,groundScanInd, ang_res_x, 
                 segmentedCloudGroundFlag.append(groundMat[i, j] == 1)
                 segmentedCloudColInd.append(j)
                 segmentedCloudRange.append(rangeMat[i, j])
-                segmentedCloud.append(lidarData[i*Horizon_SCAN + j])
+                segmentedCloud.append(np.r_[lidarData[i*Horizon_SCAN + j, :-1],i])
                 sizeOfSegCloud += 1
             endRingIndex[i] = sizeOfSegCloud - 1 - 5
 

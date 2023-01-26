@@ -1,94 +1,142 @@
-def findCorrespondingCornerFeatures(iterCount, cornerPointsSharp, laserCloudCornerLast, pointSearchCornerInd1, pointSearchCornerInd2):
-    cornerPointsSharpNum = len(cornerPointsSharp)
-    nearestFeatureSearchSqDist = 25
-    laserCloudOri = []
-    coeffSel = []
-    for i in range(cornerPointsSharpNum):
-        # pointSel == cornerPointsShape[i, :]
-        pointSel = cornerPointsSharp[i]
-        if iterCount % 5 == 0:
-            # TODO: KD=Tree for laser cloud corner&surf last            
-            # Find nearest point
-            ind = 0
-            dis = math.inf
-            for i in range(len(laserCloudCornerLast)):
-                temp_dis = d(pointSel, laserCloudCornerLast[i])
-                if temp_dis < dis:
-                    dis = temp_dis
-                    ind = i
-            closestPointInd = -1
-            minPointInd2 = -1
+from imageProjection import *
+from featureAssociation import *
+import os
+if __name__ == "__main__":
+    argparser = argparse.ArgumentParser(
+        description=__doc__)
+    argparser.add_argument(
+        '--flag',
+        default=0,
+        type=int,
+        help='0: initial cloud, 1: initial cloud with colors, 2: segmented cloud, 3: ground points, 4: remove ground points')
+    argparser.add_argument(
+        '--data',
+        default=0,
+        type=int,
+        help='0: initial data, 1: another data')
+    args = argparser.parse_args()
 
-            if dis < nearestFeatureSearchSqDist:
-                closestPointInd = ind
-                closestPointScan = laserCloudCornerLast[closestPointInd][3]
-                pointSqDis, minPointSqDis2 = nearestFeatureSearchSqDist
+    lidarCount = loadLidarData("lidarTestRaw_count.txt")
+    lidarData_ori = loadLidarData("lidarTestRaw.txt")
 
-                for j in range(closestPointInd+1, cornerPointsSharpNum):
-                    if laserCloudCornerLast[j][3] > closestPointScan + 2.5:
-                        break
-                    pointSqDis = (laserCloudCornerLast[j][0] - pointSel[0]) * (laserCloudCornerLast[j][0] - pointSel[0]) + \
-                                 (laserCloudCornerLast[j][1] - pointSel[1]) * (laserCloudCornerLast[j][1] - pointSel[1]) + \
-                                 (laserCloudCornerLast[j][2] - pointSel[2]) * (laserCloudCornerLast[j][2] - pointSel[2])
-                    if laserCloudCornerLast[j][3] > closestPointScan:
-                        if pointSqDis < minPointInd2:
-                            minPointSqDis2 = pointSqDis
-                            minPointInd2 = j
-                
-                for j in range(closestPointInd-1, -1,-1):
-                    if laserCloudCornerLast[j][3] < closestPointScan - 2.5:
-                        break
-                    pointSqDis = (laserCloudCornerLast[j][0] - pointSel[0]) * (laserCloudCornerLast[j][0] - pointSel[0]) + \
-                                 (laserCloudCornerLast[j][1] - pointSel[1]) * (laserCloudCornerLast[j][1] - pointSel[1]) + \
-                                 (laserCloudCornerLast[j][2] - pointSel[2]) * (laserCloudCornerLast[j][2] - pointSel[2])
-                    if laserCloudCornerLast[j][3] > closestPointScan:
-                        if pointSqDis < minPointInd2:
-                            minPointSqDis2 = pointSqDis
-                            minPointInd2 = j
-                pointSearchCornerInd1[i] = closestPointInd
-                pointSearchCornerInd2[i] = minPointInd2
+    rangeMat = np.ones((N_SCAN, Horizon_SCAN)) * (-1)
+    groundMat = np.zeros((N_SCAN, Horizon_SCAN))
+    labelMat = np.zeros((N_SCAN, Horizon_SCAN))
+    lidarData = projectPointCloud(lidarData_ori, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, rangeMat)
+    groundRemoval(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, groundMat, labelMat, rangeMat)
+    startRingIndex, endRingIndex, outlierCloud, segmentedCloudGroundFlag, segmentedCloudColInd, segmentedCloudRange, segmentedCloud = cloudSegmentation(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, ang_res_x, ang_res_y, labelMat, rangeMat, groundMat)
 
-            if pointSearchCornerInd2[i] >= 0:
-                tripod1 = laserCloudCornerLast[pointSearchCornerInd1[i]]
-                tripod2 = laserCloudCornerLast[pointSearchCornerInd2[i]]
-                coeff = np.zeros((4,1))
+    # dataList_seg = []
+    # colorList_seg = []
+    # for i in range(len(segmentedCloud)):
+    #     if segmentedCloudGroundFlag[i]:
+    #         colorList_seg.append(np.array([1,0,0]))
+    #     else:
+    #         colorList_seg.append(np.array([1,1,1]))
+    #     dataList_seg.append(segmentedCloud[i])
+    # dataList_seg = np.array(dataList_seg)
+    # colorList_seg = np.array(colorList_seg)
+    # dataList = removeEmptyData(lidarData)
 
-                x0 = pointSel[0]
-                y0 = pointSel[1]
-                z0 = pointSel[2]
-                x1 = tripod1[0]
-                y1 = tripod1[1]
-                z1 = tripod1[2]
-                x2 = tripod2[0]
-                y2 = tripod2[1]
-                z2 = tripod2[2]
+    vis = False
+    if vis:
+        if args.flag == 0:
+            print("All points: ", np.sum(lidarCount))
+            visulizeLiadarData(removeEmptyData(lidarData_ori))
+            
+        elif args.flag == 2:
+            visulizeLiadarData(dataList_seg, colorList_seg)
+        elif args.flag == 3:
+            for i in range(N_SCAN):
+                for j in range(Horizon_SCAN):
+                    if labelMat[i, j] != -2:
+                        lidarData[i*Horizon_SCAN+j, 3] = 0
+            visulizeLiadarData(removeEmptyData(lidarData))
+        elif args.flag == 4:
+            for i in range(N_SCAN):
+                for j in range(Horizon_SCAN):
+                    if labelMat[i, j] == -2:
+                        lidarData[i*Horizon_SCAN+j, 3] = 0
+            visulizeLiadarData(removeEmptyData(lidarData))
+        else:
+            dataList_other = []
+            colorList_other = []
+            for i in range(N_SCAN):
+                for j in range(Horizon_SCAN):
+                    if labelMat[i, j] == -1:
+                        if lidarData[i*Horizon_SCAN + j, 3] == 0:
+                            continue
+                        dataList_other.append(lidarData[i*Horizon_SCAN + j, :])
+                        colorList_other.append(np.array([0,1,0]))
+            dataList_other = np.array(dataList_other)
+            colorList_other = np.array(colorList_other)
+            dataList_other = np.r_[dataList_other, dataList_seg]
+            colorList_other = np.r_[colorList_other, colorList_seg]
+            # print(dataList_other.shape, colorList_other.shape)
+            visulizeLiadarData(dataList_other, colorList_other)
 
-                m11 = ((x0 - x1)*(y0 - y2) - (x0 - x2)*(y0 - y1))
-                m22 = ((x0 - x1)*(z0 - z2) - (x0 - x2)*(z0 - z1))
-                m33 = ((y0 - y1)*(z0 - z2) - (y0 - y2)*(z0 - z1))
+    segmentedCloud = np.array(segmentedCloud)
+    cloudCurvature = np.zeros(segmentedCloud.shape[0])
+    cloudNeighborPicked = np.zeros(segmentedCloud.shape[0])
+    cloudLabel = np.zeros(segmentedCloud.shape[0])
+    cloudSmoothness = np.zeros((segmentedCloud.shape[0],2))
 
-                a012 = math.sqrt(m11 * m11  + m22 * m22 + m33 * m33)
+    # calculateSmoothness(segmentedCloud, segmentedCloudRange, cloudCurvature, cloudNeighborPicked, cloudLabel, cloudSmoothness)
+    # markOccludePoints(segmentedCloud, segmentedCloudRange, segmentedCloudColInd, cloudNeighborPicked)
 
-                l12 = math.sqrt((x1 - x2)*(x1 - x2) + (y1 - y2)*(y1 - y2) + (z1 - z2)*(z1 - z2))
 
-                la =  ((y1 - y2)*m11 + (z1 - z2)*m22) / a012 / l12
+    frame = 1
+    lidar_files_path = './data/lidar'
+    lidar_files = os.listdir(lidar_files_path)
+    laserCloudCornerLast = []
+    laserCloudSurfLast = []
+    transformCur = np.zeros(6)
+    transformSum = np.zeros(6)
+    for data in lidar_files:
+        # print(data)
+        lidarData_ori = loadLidarData(lidar_files_path+"/"+data)
 
-                lb = -((x1 - x2)*m11 - (z1 - z2)*m33) / a012 / l12
+        rangeMat = np.ones((N_SCAN, Horizon_SCAN)) * (-1)
+        groundMat = np.zeros((N_SCAN, Horizon_SCAN))
+        labelMat = np.zeros((N_SCAN, Horizon_SCAN))
+        lidarData = projectPointCloud(lidarData_ori, ang_res_x, ang_res_y, N_SCAN, Horizon_SCAN, rangeMat)
+        groundRemoval(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, groundMat, labelMat, rangeMat)
+        startRingIndex, endRingIndex, outlierCloud, segmentedCloudGroundFlag, segmentedCloudColInd, segmentedCloudRange, segmentedCloud = cloudSegmentation(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, ang_res_x, ang_res_y, labelMat, rangeMat, groundMat)
 
-                lc = -((x1 - x2)*m22 + (y1 - y2)*m33) / a012 / l12
+        segmentedCloud = np.array(segmentedCloud)
+        cloudCurvature = np.zeros(segmentedCloud.shape[0])
+        cloudNeighborPicked = np.zeros(segmentedCloud.shape[0])
+        cloudLabel = np.zeros(segmentedCloud.shape[0])
+        cloudSmoothness = np.zeros((segmentedCloud.shape[0],2))
 
-                ld2 = a012 / l12
+        calculateSmoothness(segmentedCloud, segmentedCloudRange, cloudCurvature, cloudNeighborPicked, cloudLabel, cloudSmoothness)
+        markOccludePoints(segmentedCloud, segmentedCloudRange, segmentedCloudColInd, cloudNeighborPicked)
+        cornerPointsSharp, cornerPointsLessSharp, surfPointsFlat, surfPointsLessFlat = extractFeatures(N_SCAN, startRingIndex, endRingIndex, segmentedCloud, segmentedCloudColInd, cloudSmoothness, cloudNeighborPicked, cloudCurvature, segmentedCloudGroundFlag, cloudLabel)
 
-                s = 1
-                if iterCount >= 5:
-                    s = 1 - 1.8 * math.fabs(ld2)
-    
+        cornerPointsSharpColor = np.array([[1,1,1]]*len(cornerPointsSharp))
+        cornerPointsLessSharpColor = np.array([[1,1,1]]*len(cornerPointsLessSharp))
+        surfPointsFlatColor = np.array([[0,1,0]]*len(surfPointsFlat))
+        surfPointsLessFlatColor = np.array([[0,0,1]]*len(surfPointsLessFlat))
+        cloud_extracted = np.r_[cornerPointsLessSharp, surfPointsLessFlat]
+        color_extracted = np.r_[cornerPointsLessSharpColor, surfPointsLessFlatColor]
+        # visulizeLiadarData(cloud_extracted, color_extracted)
 
-                if s > 0.1 and ld2 != 0:
-                    coeff[0] = s * la 
-                    coeff[1] = s * lb
-                    coeff[2] = s * lc
-                    coeff[3] = s * ld2
-                  
-                    laserCloudOri.append(cornerPointsSharp[i])
-                    coeffSel.append(coeff)
+        if frame == 1:
+            laserCloudCornerLast = cornerPointsLessSharp
+            laserCloudSurfLast = surfPointsLessFlat
+            print("less Sharp number:", len(cornerPointsLessSharp), " less Surf number:", len(surfPointsLessFlat))
+            print("Sharp number:", len(cornerPointsSharp), " Surf number:", len(surfPointsFlat))
+            print("Current transform:", transformCur)
+            print("Current position:", transformSum)
+            frame += 1
+            continue
+        else:
+            updateTransformation(laserCloudCornerLast, laserCloudSurfLast, surfPointsFlat, cornerPointsSharp, transformCur)
+            interateTransformation(transformSum, transformCur)
+            print("less Sharp number:", len(cornerPointsLessSharp), " less Surf number:", len(surfPointsLessFlat))
+            print("Sharp number:", len(cornerPointsSharp), " Surf number:", len(surfPointsFlat))
+            print("Current transform:", transformCur)
+            print("Current position:", transformSum)
+            frame += 1
+            laserCloudCornerLast = cornerPointsLessSharp
+            laserCloudSurfLast = surfPointsLessFlat
