@@ -16,6 +16,7 @@ if __name__ == "__main__":
         help='0: initial data, 1: another data')
     args = argparser.parse_args()
 
+    '''
     lidarCount = loadLidarData("lidarTestRaw_count.txt")
     lidarData_ori = loadLidarData("lidarTestRaw.txt")
 
@@ -83,10 +84,14 @@ if __name__ == "__main__":
 
     # calculateSmoothness(segmentedCloud, segmentedCloudRange, cloudCurvature, cloudNeighborPicked, cloudLabel, cloudSmoothness)
     # markOccludePoints(segmentedCloud, segmentedCloudRange, segmentedCloudColInd, cloudNeighborPicked)
-
+    '''
 
     frame = 1
-    lidar_files_path = './data/lidar'
+    outputPath = "G:\Carla//CARLA_0.9.13//WindowsNoEditor//PythonAPI//_out//"
+    img_files_path = outputPath + "camera//"
+    gt_path = outputPath + "gt//"
+    lidar_files_path = outputPath + "lidar//"
+
     lidar_files = os.listdir(lidar_files_path)
     laserCloudCornerLast = []
     laserCloudSurfLast = []
@@ -104,14 +109,15 @@ if __name__ == "__main__":
         startRingIndex, endRingIndex, outlierCloud, segmentedCloudGroundFlag, segmentedCloudColInd, segmentedCloudRange, segmentedCloud = cloudSegmentation(lidarData, N_SCAN, Horizon_SCAN, groundScanInd, ang_res_x, ang_res_y, labelMat, rangeMat, groundMat)
 
         segmentedCloud = np.array(segmentedCloud)
-        cloudCurvature = np.zeros(segmentedCloud.shape[0])
-        cloudNeighborPicked = np.zeros(segmentedCloud.shape[0])
-        cloudLabel = np.zeros(segmentedCloud.shape[0])
-        cloudSmoothness = np.zeros((segmentedCloud.shape[0],2))
 
-        calculateSmoothness(segmentedCloud, segmentedCloudRange, cloudCurvature, cloudNeighborPicked, cloudLabel, cloudSmoothness)
-        markOccludePoints(segmentedCloud, segmentedCloudRange, segmentedCloudColInd, cloudNeighborPicked)
-        cornerPointsSharp, cornerPointsLessSharp, surfPointsFlat, surfPointsLessFlat = extractFeatures(N_SCAN, startRingIndex, endRingIndex, segmentedCloud, segmentedCloudColInd, cloudSmoothness, cloudNeighborPicked, cloudCurvature, segmentedCloudGroundFlag, cloudLabel)
+        feature = featureAccociation(segmentedCloud, segmentedCloudRange, segmentedCloudColInd, N_SCAN, startRingIndex, endRingIndex, segmentedCloudGroundFlag)
+        # cloudCurvature = np.zeros(segmentedCloud.shape[0])
+        # cloudNeighborPicked = np.zeros(segmentedCloud.shape[0])
+        # cloudLabel = np.zeros(segmentedCloud.shape[0])
+        # cloudSmoothness = np.zeros((segmentedCloud.shape[0],2))
+        feature.calculateSmoothness()
+        feature.markOccludePoints()
+        cornerPointsSharp, cornerPointsLessSharp, surfPointsFlat, surfPointsLessFlat = feature.extractFeatures()
 
         cornerPointsSharpColor = np.array([[1,1,1]]*len(cornerPointsSharp))
         cornerPointsLessSharpColor = np.array([[1,1,1]]*len(cornerPointsLessSharp))
@@ -131,8 +137,8 @@ if __name__ == "__main__":
             frame += 1
             continue
         else:
-            updateTransformation(laserCloudCornerLast, laserCloudSurfLast, surfPointsFlat, cornerPointsSharp, transformCur)
-            interateTransformation(transformSum, transformCur)
+            feature.updateTransformation(laserCloudCornerLast, laserCloudSurfLast, surfPointsFlat, cornerPointsSharp, transformCur)
+            feature.interateTransformation(transformSum, transformCur)
             print("less Sharp number:", len(cornerPointsLessSharp), " less Surf number:", len(surfPointsLessFlat))
             print("Sharp number:", len(cornerPointsSharp), " Surf number:", len(surfPointsFlat))
             print("Current transform:", transformCur)
